@@ -1,0 +1,148 @@
+name: Release Flutter Apps
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag to release (optional when manually triggered)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  android-apk:
+    name: Build Android APKs (per ABI)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 'stable'
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Build APK (per ABI)
+        run: flutter build apk --release --split-per-abi
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: |
+            build/app/outputs/flutter-apk/*-release.apk
+          if-no-files-found: error
+
+  windows-exe:
+    name: Build Windows EXE
+    runs-on: windows-latest
+    env:
+      BUILD_DIR: build/windows/runner/Release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 'stable'
+          cache: true
+
+      - name: Enable Windows desktop
+        shell: pwsh
+        run: |
+          flutter config --enable-windows-desktop
+          flutter doctor -v
+
+      - name: Get dependencies
+        shell: pwsh
+        run: flutter pub get
+
+      - name: Build Windows release
+        shell: pwsh
+        run: flutter build windows --release
+
+      - name: Locate built EXE
+        id: find_exe
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "$env:BUILD_DIR" -Filter *.exe | Select-Object -First 1
+          if (-not $exe) { Write-Error 'EXE not found'; exit 1 }
+          echo "exe_path=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Zip Windows release folder
+        shell: pwsh
+        run: |
+          $zipPath = "$env:RUNNER_TEMP\\windows-release.zip"
+          Compress-Archive -Path "$env:BUILD_DIR/*" -DestinationPath $zipPath -Force
+          echo "zip_path=$zipPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-binaries
+          path: |
+            ${{ steps.find_exe.outputs.exe_path }}
+            ${{ runner.temp }}\\windows-release.zip
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [android-apk, windows-exe]
+    steps:
+      - name: Download Android artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+          path: dist/android
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-binaries
+          path: dist/windows
+
+      - name: Determine tag and release name
+        id: vars
+        shell: bash
+        run: |
+          if [[ -n "${{ github.ref_name }}" ]]; then
+            TAG="${{ github.ref_name }}"
+          elif [[ -n "${{ github.event.inputs.tag_name }}" ]]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+          else
+            echo 'No tag provided. Set tag_name when manually dispatching or push a tag v*.'
+            exit 1
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "name=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Create Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: ${{ steps.vars.outputs.name }}
+          draft: false
+          prerelease: false
+          files: |
+            dist/android/*.apk
+            dist/windows/*.exe
+            dist/windows/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
