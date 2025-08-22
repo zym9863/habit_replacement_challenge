@@ -52,7 +52,7 @@ jobs:
     name: Build Windows EXE
     runs-on: windows-latest
     env:
-      BUILD_DIR: build/windows/runner/Release
+      BUILD_DIR: build/windows/x64/runner/Release
     steps:
       - name: Checkout
         uses: actions/checkout@v4
