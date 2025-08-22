@@ -51,7 +51,7 @@ class MyApp extends StatelessWidget {
             ),
           ),
           // 卡片主题
-          cardTheme: CardTheme(
+          cardTheme: CardThemeData(
             color: Colors.white,
             elevation: 3,
             shadowColor: Colors.black.withOpacity(0.1),
